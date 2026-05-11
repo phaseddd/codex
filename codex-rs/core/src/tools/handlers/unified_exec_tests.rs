@@ -205,6 +205,21 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
 }
 
 #[tokio::test]
+async fn exec_command_with_model_shell_is_mutating() {
+    let payload = ToolPayload::Function {
+        arguments: serde_json::json!({
+            "cmd": "ls",
+            "shell": "/tmp/cc01_fake/bash",
+        })
+        .to_string(),
+    };
+    let invocation = invocation_for_payload("exec_command", "call-44", payload).await;
+    let handler = ExecCommandHandler::default();
+
+    assert!(handler.is_mutating(&invocation).await);
+}
+
+#[tokio::test]
 async fn exec_command_pre_tool_use_payload_skips_write_stdin() {
     let payload = ToolPayload::Function {
         arguments: serde_json::json!({ "chars": "echo hi" }).to_string(),

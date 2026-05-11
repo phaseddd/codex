@@ -108,6 +108,9 @@ impl ToolHandler for ExecCommandHandler {
         let Ok(params) = parse_arguments::<ExecCommandArgs>(arguments) else {
             return true;
         };
+        if params.shell.is_some() {
+            return true;
+        }
         let command = match get_command(
             &params,
             invocation.session.user_shell(),
@@ -181,6 +184,7 @@ impl ToolHandler for ExecCommandHandler {
         let environment = Arc::clone(&turn_environment.environment);
         let fs = environment.get_filesystem();
         let args: ExecCommandArgs = parse_arguments_with_base_path(&arguments, &cwd)?;
+        let model_provided_shell = args.shell.is_some();
         let hook_command = args.cmd.clone();
         maybe_emit_implicit_skill_invocation(
             session.as_ref(),
@@ -314,6 +318,7 @@ impl ToolHandler for ExecCommandHandler {
                         .permissions_preapproved,
                     justification,
                     prefix_rule,
+                    allow_execpolicy_amendment: !model_provided_shell,
                 },
                 &context,
             )
