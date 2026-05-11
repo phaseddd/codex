@@ -78,6 +78,9 @@ impl SessionTask for RegularTask {
             )
             .instrument(run_turn_span.clone())
             .await;
+            if sess.usage_limit_reached_for_active_turn().await {
+                return last_agent_message;
+            }
             if !sess.has_pending_input().await {
                 return last_agent_message;
             }
