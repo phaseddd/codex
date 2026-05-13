@@ -81,7 +81,20 @@ function Export-MsvcEnvironment {
         throw "VCToolsInstallDir was not exported by VsDevCmd.bat"
     }
 
-    $linker = Join-Path $installPath "VC\Tools\Llvm\x64\bin\lld-link.exe"
+    $linker = $null
+    $rustc = Get-Command rustc -ErrorAction SilentlyContinue
+    if ($rustc) {
+        $sysroot = (& rustc --print sysroot 2>$null).Trim()
+        if ($sysroot) {
+            $rustLld = Join-Path $sysroot "lib\rustlib\x86_64-pc-windows-msvc\bin\rust-lld.exe"
+            if (Test-Path $rustLld) {
+                $linker = $rustLld
+            }
+        }
+    }
+    if (-not $linker) {
+        $linker = Join-Path $installPath "VC\Tools\Llvm\x64\bin\lld-link.exe"
+    }
     if (-not (Test-Path $linker)) {
         $linker = Join-Path $vcToolsInstallDir "bin\HostX64\$TargetArch\link.exe"
     }
