@@ -58,6 +58,7 @@ function Export-MsvcEnvironment {
         "WindowsSDKVersion"
     )
     $envLines = & cmd.exe /c ('"{0}" -no_logo -arch={1} -host_arch=x64 >nul && set' -f $vsDevCmd, $TargetArch)
+    $vcToolsInstallDir = $null
     foreach ($line in $envLines) {
         if ($line -notmatch "^(.*?)=(.*)$") {
             continue
@@ -69,9 +70,23 @@ function Export-MsvcEnvironment {
             if ($name -ieq "Path") {
                 $name = "PATH"
             }
+            if ($name -eq "VCToolsInstallDir") {
+                $vcToolsInstallDir = $value
+            }
             "$name=$value" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         }
     }
+
+    if (-not $vcToolsInstallDir) {
+        throw "VCToolsInstallDir was not exported by VsDevCmd.bat"
+    }
+
+    $linker = Join-Path $vcToolsInstallDir "bin\HostX64\$TargetArch\link.exe"
+    if (-not (Test-Path $linker)) {
+        throw "MSVC linker not found at $linker"
+    }
+
+    "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 }
 
 if (Test-Path "D:\") {
