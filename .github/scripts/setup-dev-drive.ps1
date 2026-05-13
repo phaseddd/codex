@@ -81,11 +81,15 @@ function Export-MsvcEnvironment {
         throw "VCToolsInstallDir was not exported by VsDevCmd.bat"
     }
 
-    $linker = Join-Path $vcToolsInstallDir "bin\HostX64\$TargetArch\link.exe"
+    $linker = Join-Path $installPath "VC\Tools\Llvm\x64\bin\lld-link.exe"
     if (-not (Test-Path $linker)) {
-        throw "MSVC linker not found at $linker"
+        $linker = Join-Path $vcToolsInstallDir "bin\HostX64\$TargetArch\link.exe"
+    }
+    if (-not (Test-Path $linker)) {
+        throw "Windows linker not found at $linker"
     }
 
+    Write-Output "Using Windows linker: $linker"
     "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 }
 
