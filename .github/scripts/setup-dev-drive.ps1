@@ -66,6 +66,9 @@ function Export-MsvcEnvironment {
         $name = $matches[1]
         $value = $matches[2]
         if ($varsToExport -contains $name) {
+            if ($name -ieq "Path") {
+                $name = "PATH"
+            }
             "$name=$value" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         }
     }
