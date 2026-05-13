@@ -89,6 +89,57 @@ function Export-MsvcEnvironment {
     "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 }
 
+function Install-ArchiveCargoProbe {
+    $probeDir = Join-Path $env:RUNNER_TEMP "arm64-archive-cargo-probe"
+    New-Item -Path $probeDir -ItemType Directory -Force | Out-Null
+
+    $wrapperPath = Join-Path $probeDir "cargo"
+    @'
+#!/usr/bin/env bash
+exec pwsh -NoProfile -File "$RUNNER_TEMP/arm64-archive-cargo-probe/cargo-wrapper.ps1" "$@"
+'@ | Out-File -FilePath $wrapperPath -Encoding utf8
+
+    $wrapperScript = Join-Path $probeDir "cargo-wrapper.ps1"
+    @'
+$ErrorActionPreference = "Stop"
+
+function Write-ProcessSnapshot {
+    $timestamp = Get-Date -Format o
+    Write-Output "ARM64_ARCHIVE_PROCESS_SNAPSHOT $timestamp"
+    Get-CimInstance Win32_Process |
+        Where-Object {
+            $_.Name -match '^(cargo|rustc|link|sccache|conhost)\.exe$' -or
+            $_.CommandLine -match 'cargo nextest archive|codex-cloud-tasks|aarch64-pc-windows-msvc'
+        } |
+        Sort-Object ProcessId |
+        ForEach-Object {
+            $commandLine = ($_.CommandLine -replace '\s+', ' ').Trim()
+            Write-Output ("ARM64_ARCHIVE_PROCESS pid={0} ppid={1} name={2} cmd={3}" -f $_.ProcessId, $_.ParentProcessId, $_.Name, $commandLine)
+        }
+}
+
+$realCargo = Join-Path $env:USERPROFILE ".cargo\bin\cargo.exe"
+if (-not (Test-Path $realCargo)) {
+    throw "cargo.exe not found at $realCargo"
+}
+
+$cargo = Start-Process -FilePath $realCargo -ArgumentList $args -NoNewWindow -PassThru
+$lastSnapshot = [DateTime]::MinValue
+while (-not $cargo.HasExited) {
+    if ((Get-Date) - $lastSnapshot -ge [TimeSpan]::FromSeconds(30)) {
+        Write-ProcessSnapshot
+        $lastSnapshot = Get-Date
+    }
+    Start-Sleep -Seconds 5
+    $cargo.Refresh()
+}
+
+exit $cargo.ExitCode
+'@ | Out-File -FilePath $wrapperScript -Encoding utf8
+
+    $probeDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+}
+
 if (Test-Path "D:\") {
     Write-Output "Using existing drive at D:"
     $Drive = "D:"
@@ -132,4 +183,5 @@ New-Item -Path $Tmp -ItemType Directory -Force | Out-Null
 if ($env:WINDOWS_ARM64_ARCHIVE_FILE) {
     Write-Output "Exporting ARM64 MSVC environment for nextest archive build"
     Export-MsvcEnvironment -TargetArch "arm64" -RequiredComponent "Microsoft.VisualStudio.Component.VC.Tools.ARM64"
+    Install-ArchiveCargoProbe
 }
