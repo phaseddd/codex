@@ -21,6 +21,56 @@ function Invoke-BestEffort {
     }
 }
 
+function Export-MsvcEnvironment {
+    param(
+        [string]$TargetArch,
+        [string]$RequiredComponent
+    )
+
+    $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+    if (-not (Test-Path $vswhere)) {
+        throw "vswhere.exe not found"
+    }
+
+    $installPath = & $vswhere -latest -products * -requires $RequiredComponent -property installationPath 2>$null
+    if (-not $installPath) {
+        throw "Could not locate a Visual Studio installation with component $RequiredComponent"
+    }
+
+    $vsDevCmd = Join-Path $installPath "Common7\Tools\VsDevCmd.bat"
+    if (-not (Test-Path $vsDevCmd)) {
+        throw "VsDevCmd.bat not found at $vsDevCmd"
+    }
+
+    $varsToExport = @(
+        "INCLUDE",
+        "LIB",
+        "LIBPATH",
+        "PATH",
+        "UCRTVersion",
+        "UniversalCRTSdkDir",
+        "VCINSTALLDIR",
+        "VCToolsInstallDir",
+        "WindowsLibPath",
+        "WindowsSdkBinPath",
+        "WindowsSdkDir",
+        "WindowsSDKLibVersion",
+        "WindowsSDKVersion"
+    )
+    $envLines = & cmd.exe /c ('"{0}" -no_logo -arch={1} -host_arch=x64 >nul && set' -f $vsDevCmd, $TargetArch)
+    foreach ($line in $envLines) {
+        if ($line -notmatch "^(.*?)=(.*)$") {
+            continue
+        }
+
+        $name = $matches[1]
+        $value = $matches[2]
+        if ($varsToExport -contains $name) {
+            "$name=$value" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        }
+    }
+}
+
 if (Test-Path "D:\") {
     Write-Output "Using existing drive at D:"
     $Drive = "D:"
@@ -60,3 +110,8 @@ New-Item -Path $Tmp -ItemType Directory -Force | Out-Null
     "TMP=$Tmp"
     "TEMP=$Tmp"
 ) | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+if ($env:WINDOWS_ARM64_ARCHIVE_FILE) {
+    Write-Output "Exporting ARM64 MSVC environment for nextest archive build"
+    Export-MsvcEnvironment -TargetArch "arm64" -RequiredComponent "Microsoft.VisualStudio.Component.VC.Tools.ARM64"
+}
