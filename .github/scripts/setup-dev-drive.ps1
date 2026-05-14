@@ -127,7 +127,7 @@ internal static class Program
         {
             UseShellExecute = false,
         };
-        var filteredArgs = new List<string>();
+        var filteredArgs = new List<string> { "-flavor", "link" };
         foreach (var arg in args)
         {
             if (!string.Equals(arg, "/arm64hazardfree", StringComparison.OrdinalIgnoreCase))
