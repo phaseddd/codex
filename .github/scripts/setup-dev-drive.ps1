@@ -106,7 +106,7 @@ function Export-MsvcEnvironment {
         $wrapperDir = Join-Path $env:RUNNER_TEMP "arm64-archive-lld-wrapper"
         New-Item -Path $wrapperDir -ItemType Directory -Force | Out-Null
         $wrapperPath = Join-Path $wrapperDir "lld-link-wrapper.exe"
-        @'
+        $wrapperSource = @'
 using System;
 using System.Diagnostics;
 
@@ -144,7 +144,8 @@ internal static class Program
         return process.ExitCode;
     }
 }
-'@ | Add-Type -Language CSharp -OutputAssembly $wrapperPath -OutputType ConsoleApplication
+'@
+        Add-Type -TypeDefinition $wrapperSource -Language CSharp -OutputAssembly $wrapperPath -OutputType ConsoleApplication
         "ARM64_ARCHIVE_REAL_LINKER=$linker" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         $linker = $wrapperPath
     }
