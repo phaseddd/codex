@@ -120,7 +120,9 @@ runs:
           $wrapperPath = Join-Path $wrapperDir "lld-link-wrapper.exe"
           $wrapperSource = @'
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
+using System.Text;
 
 internal static class Program
 {
@@ -137,13 +139,15 @@ internal static class Program
         {
             UseShellExecute = false,
         };
+        var filteredArgs = new List<string>();
         foreach (var arg in args)
         {
             if (!string.Equals(arg, "/arm64hazardfree", StringComparison.OrdinalIgnoreCase))
             {
-                startInfo.ArgumentList.Add(arg);
+                filteredArgs.Add(QuoteArgument(arg));
             }
         }
+        startInfo.Arguments = string.Join(" ", filteredArgs);
 
         using var process = Process.Start(startInfo);
         if (process is null)
@@ -155,9 +159,55 @@ internal static class Program
         process.WaitForExit();
         return process.ExitCode;
     }
+
+    private static string QuoteArgument(string argument)
+    {
+        if (argument.Length == 0)
+        {
+            return "\"\"";
+        }
+        if (argument.IndexOfAny(new[] { ' ', '\t', '"' }) < 0)
+        {
+            return argument;
+        }
+
+        var quoted = new StringBuilder("\"");
+        var backslashes = 0;
+        foreach (var character in argument)
+        {
+            if (character == '\\')
+            {
+                backslashes++;
+                continue;
+            }
+            if (character == '"')
+            {
+                quoted.Append('\\', (backslashes * 2) + 1);
+                quoted.Append(character);
+                backslashes = 0;
+                continue;
+            }
+
+            quoted.Append('\\', backslashes);
+            backslashes = 0;
+            quoted.Append(character);
+        }
+        quoted.Append('\\', backslashes * 2);
+        quoted.Append('"');
+        return quoted.ToString();
+    }
 }
 '@
-          Add-Type -TypeDefinition $wrapperSource -Language CSharp -OutputAssembly $wrapperPath -OutputType ConsoleApplication
+          $wrapperSourcePath = Join-Path $wrapperDir "lld-link-wrapper.cs"
+          $wrapperSource | Out-File -FilePath $wrapperSourcePath -Encoding utf8
+          $csc = Join-Path $installPath "MSBuild\Current\Bin\Roslyn\csc.exe"
+          if (-not (Test-Path $csc)) {
+            throw "csc.exe not found at $csc"
+          }
+          & $csc /nologo /target:exe /out:$wrapperPath $wrapperSourcePath
+          if ($LASTEXITCODE -ne 0) {
+            throw "Failed to compile lld-link wrapper"
+          }
           "ARM64_ARCHIVE_REAL_LINKER=$linker" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $linker = $wrapperPath
         }
