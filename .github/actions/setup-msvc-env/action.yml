@@ -140,7 +140,7 @@ internal static class Program
         {
             UseShellExecute = false,
         };
-        var filteredArgs = new List<string> { "-flavor", "link", "/defaultlib:ucrt" };
+        var filteredArgs = new List<string> { "-flavor", "link", "/defaultlib:ucrt", "/nodefaultlib:libucrt" };
         foreach (var arg in args)
         {
             if (!string.Equals(arg, "/arm64hazardfree", StringComparison.OrdinalIgnoreCase))
