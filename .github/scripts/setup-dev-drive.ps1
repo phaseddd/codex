@@ -110,6 +110,7 @@ function Export-MsvcEnvironment {
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Text;
 
 internal static class Program
@@ -132,7 +133,7 @@ internal static class Program
         {
             if (!string.Equals(arg, "/arm64hazardfree", StringComparison.OrdinalIgnoreCase))
             {
-                filteredArgs.Add(QuoteArgument(arg));
+                filteredArgs.Add(QuoteArgument(FilterResponseFile(arg)));
             }
         }
         startInfo.Arguments = string.Join(" ", filteredArgs);
@@ -146,6 +147,25 @@ internal static class Program
 
         process.WaitForExit();
         return process.ExitCode;
+    }
+
+    private static string FilterResponseFile(string argument)
+    {
+        if (argument.Length < 2 || argument[0] != '@')
+        {
+            return argument;
+        }
+
+        var responsePath = argument.Substring(1);
+        if (!File.Exists(responsePath))
+        {
+            return argument;
+        }
+
+        var filteredResponsePath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName() + ".rsp");
+        var responseContents = File.ReadAllText(responsePath).Replace("/arm64hazardfree", string.Empty);
+        File.WriteAllText(filteredResponsePath, responseContents);
+        return "@" + filteredResponsePath;
     }
 
     private static string QuoteArgument(string argument)
