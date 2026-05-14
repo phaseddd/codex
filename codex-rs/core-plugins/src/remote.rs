@@ -625,16 +625,30 @@ fn build_remote_marketplace(
 pub async fn fetch_remote_installed_plugins(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
+    include_global: bool,
+    include_workspace: bool,
 ) -> Result<Vec<RemoteInstalledPlugin>, RemotePluginCatalogError> {
+    if !include_global && !include_workspace {
+        return Ok(Vec::new());
+    }
+
     let auth = ensure_chatgpt_auth(auth)?;
     let global = async {
         let scope = RemotePluginScope::Global;
-        let installed_plugins = fetch_installed_plugins_for_scope(config, auth, scope).await?;
+        let installed_plugins = if include_global {
+            fetch_installed_plugins_for_scope(config, auth, scope).await?
+        } else {
+            Vec::new()
+        };
         Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
     };
     let workspace = async {
         let scope = RemotePluginScope::Workspace;
-        let installed_plugins = fetch_installed_plugins_for_scope(config, auth, scope).await?;
+        let installed_plugins = if include_workspace {
+            fetch_installed_plugins_for_scope(config, auth, scope).await?
+        } else {
+            Vec::new()
+        };
         Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
     };
 

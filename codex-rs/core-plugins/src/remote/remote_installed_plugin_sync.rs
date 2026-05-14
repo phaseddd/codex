@@ -82,8 +82,14 @@ pub fn maybe_start_remote_installed_plugin_bundle_sync(
     codex_home: PathBuf,
     config: RemotePluginServiceConfig,
     auth: Option<CodexAuth>,
+    include_global: bool,
+    include_workspace: bool,
     on_local_cache_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
 ) {
+    if !include_global && !include_workspace {
+        return;
+    }
+
     let Some(auth) = auth else {
         return;
     };
@@ -95,8 +101,14 @@ pub fn maybe_start_remote_installed_plugin_bundle_sync(
     }
 
     tokio::spawn(async move {
-        let result =
-            sync_remote_installed_plugin_bundles_once(codex_home, &config, Some(&auth)).await;
+        let result = sync_remote_installed_plugin_bundles_once_filtered(
+            codex_home,
+            &config,
+            Some(&auth),
+            include_global,
+            include_workspace,
+        )
+        .await;
         match result {
             Ok(outcome) => {
                 if outcome.changed_local_cache()
@@ -127,46 +139,68 @@ pub async fn sync_remote_installed_plugin_bundles_once(
     config: &RemotePluginServiceConfig,
     auth: Option<&CodexAuth>,
 ) -> Result<RemoteInstalledPluginBundleSyncOutcome, RemoteInstalledPluginBundleSyncError> {
+    sync_remote_installed_plugin_bundles_once_filtered(
+        codex_home, config, auth, /*include_global*/ true, /*include_workspace*/ true,
+    )
+    .await
+}
+
+async fn sync_remote_installed_plugin_bundles_once_filtered(
+    codex_home: PathBuf,
+    config: &RemotePluginServiceConfig,
+    auth: Option<&CodexAuth>,
+    include_global: bool,
+    include_workspace: bool,
+) -> Result<RemoteInstalledPluginBundleSyncOutcome, RemoteInstalledPluginBundleSyncError> {
+    if !include_global && !include_workspace {
+        return Ok(RemoteInstalledPluginBundleSyncOutcome::default());
+    }
+
     let auth = ensure_chatgpt_auth(auth)?;
     let global = async {
         let scope = RemotePluginScope::Global;
-        let installed_plugins = fetch_installed_plugins_for_scope_with_download_url(
-            config, auth, scope, /*include_download_urls*/ true,
-        )
-        .await?;
+        let installed_plugins = if include_global {
+            fetch_installed_plugins_for_scope_with_download_url(
+                config, auth, scope, /*include_download_urls*/ true,
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
         Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
     };
     let workspace = async {
         let scope = RemotePluginScope::Workspace;
-        let installed_plugins = fetch_installed_plugins_for_scope_with_download_url(
-            config, auth, scope, /*include_download_urls*/ true,
-        )
-        .await?;
+        let installed_plugins = if include_workspace {
+            fetch_installed_plugins_for_scope_with_download_url(
+                config, auth, scope, /*include_download_urls*/ true,
+            )
+            .await?
+        } else {
+            Vec::new()
+        };
         Ok::<_, RemotePluginCatalogError>((scope, installed_plugins))
     };
 
     let (global, workspace) = tokio::try_join!(global, workspace)?;
     let store = PluginStore::try_new(codex_home.clone())?;
-    let mut installed_plugin_names_by_marketplace =
-        BTreeMap::<String, BTreeSet<String>>::from_iter([
-            (REMOTE_GLOBAL_MARKETPLACE_NAME.to_string(), BTreeSet::new()),
-            (
-                REMOTE_WORKSPACE_MARKETPLACE_NAME.to_string(),
-                BTreeSet::new(),
-            ),
-            (
-                REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME.to_string(),
-                BTreeSet::new(),
-            ),
-            (
-                REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME.to_string(),
-                BTreeSet::new(),
-            ),
-            (
-                REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME.to_string(),
-                BTreeSet::new(),
-            ),
+    let mut cache_marketplace_names = Vec::new();
+    if include_global {
+        cache_marketplace_names.push(REMOTE_GLOBAL_MARKETPLACE_NAME);
+    }
+    if include_workspace {
+        cache_marketplace_names.extend([
+            REMOTE_WORKSPACE_MARKETPLACE_NAME,
+            REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
+            REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
+            REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME,
         ]);
+    }
+    let mut installed_plugin_names_by_marketplace = BTreeMap::<String, BTreeSet<String>>::from_iter(
+        cache_marketplace_names
+            .iter()
+            .map(|marketplace_name| ((*marketplace_name).to_string(), BTreeSet::new())),
+    );
     let mut installed_plugin_ids = BTreeSet::new();
     let mut failed_remote_plugin_ids = BTreeSet::new();
 
@@ -250,6 +284,7 @@ pub async fn sync_remote_installed_plugin_bundles_once(
         remove_stale_remote_plugin_caches(
             codex_home.as_path(),
             &installed_plugin_names_by_marketplace,
+            &cache_marketplace_names,
         )
     })
     .await?
@@ -303,15 +338,10 @@ impl Drop for RemotePluginCacheMutationGuard {
 fn remove_stale_remote_plugin_caches(
     codex_home: &Path,
     installed_plugin_names_by_marketplace: &BTreeMap<String, BTreeSet<String>>,
+    cache_marketplace_names: &[&str],
 ) -> Result<Vec<String>, String> {
     let mut removed_cache_plugin_ids = Vec::new();
-    for marketplace_name in [
-        REMOTE_GLOBAL_MARKETPLACE_NAME,
-        REMOTE_WORKSPACE_MARKETPLACE_NAME,
-        REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
-        REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
-        REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME,
-    ] {
+    for marketplace_name in cache_marketplace_names.iter().copied() {
         let marketplace_root = codex_home.join(PLUGINS_CACHE_DIR).join(marketplace_name);
         if !marketplace_root.exists() {
             continue;
@@ -491,6 +521,7 @@ mod tests {
         let removed = remove_stale_remote_plugin_caches(
             codex_home.path(),
             &installed_plugin_names_by_marketplace,
+            &[REMOTE_GLOBAL_MARKETPLACE_NAME],
         )
         .expect("cleanup while install is guarded");
         assert_eq!(removed, Vec::<String>::new());
@@ -500,6 +531,7 @@ mod tests {
         let removed = remove_stale_remote_plugin_caches(
             codex_home.path(),
             &installed_plugin_names_by_marketplace,
+            &[REMOTE_GLOBAL_MARKETPLACE_NAME],
         )
         .expect("cleanup while second install guard is still active");
         assert_eq!(removed, Vec::<String>::new());
@@ -509,6 +541,7 @@ mod tests {
         let removed = remove_stale_remote_plugin_caches(
             codex_home.path(),
             &installed_plugin_names_by_marketplace,
+            &[REMOTE_GLOBAL_MARKETPLACE_NAME],
         )
         .expect("cleanup after install guard is dropped");
         assert_eq!(removed, vec!["linear@chatgpt-global".to_string()]);
@@ -566,6 +599,12 @@ mod tests {
         let removed = remove_stale_remote_plugin_caches(
             codex_home.path(),
             &installed_plugin_names_by_marketplace,
+            &[
+                REMOTE_WORKSPACE_MARKETPLACE_NAME,
+                REMOTE_WORKSPACE_SHARED_WITH_ME_MARKETPLACE_NAME,
+                REMOTE_WORKSPACE_SHARED_WITH_ME_PRIVATE_MARKETPLACE_NAME,
+                REMOTE_WORKSPACE_SHARED_WITH_ME_UNLISTED_MARKETPLACE_NAME,
+            ],
         )
         .expect("cleanup private shared-with-me cache");
 

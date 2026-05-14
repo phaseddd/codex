@@ -13,8 +13,9 @@ description: Create and scaffold plugin directories for Codex with a required `.
   # Plugin names are normalized to lower-case hyphen-case and must be <= 64 chars.
   # The generated folder and plugin.json name are always the same.
 # Run from repo root (or replace .agents/... with the absolute path to this SKILL).
-# By default creates in ~/plugins/<plugin-name>.
-python3 .agents/skills/plugin-creator/scripts/create_basic_plugin.py <plugin-name>
+# Default personal plugin: pass the destination explicitly.
+python3 .agents/skills/plugin-creator/scripts/create_basic_plugin.py <plugin-name> \
+  --path ~/plugins
 ```
 
 2. Open `<plugin-path>/.codex-plugin/plugin.json` and replace `[TODO: ...]` placeholders.
@@ -22,8 +23,11 @@ python3 .agents/skills/plugin-creator/scripts/create_basic_plugin.py <plugin-nam
 3. Generate or update the personal marketplace entry when the plugin should appear in Codex UI ordering:
 
 ```bash
-# Personal marketplace entries default to ~/.agents/plugins/marketplace.json.
-python3 .agents/skills/plugin-creator/scripts/create_basic_plugin.py my-plugin --with-marketplace
+# Personal marketplace entries live at ~/.agents/plugins/marketplace.json.
+python3 .agents/skills/plugin-creator/scripts/create_basic_plugin.py my-plugin \
+  --path ~/plugins \
+  --marketplace-path ~/.agents/plugins/marketplace.json \
+  --with-marketplace
 ```
 
 If the current Git repo already has `.agents/plugins/marketplace.json` and the user has not said

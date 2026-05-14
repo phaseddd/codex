@@ -35,6 +35,7 @@ use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeError;
 use crate::marketplace_upgrade::ConfiguredMarketplaceUpgradeOutcome;
 use crate::marketplace_upgrade::configured_git_marketplace_names;
 use crate::marketplace_upgrade::upgrade_configured_git_marketplaces;
+use crate::remote::REMOTE_GLOBAL_MARKETPLACE_NAME;
 use crate::remote::RemoteInstalledPlugin;
 use crate::remote::RemotePluginCatalogError;
 use crate::remote::RemotePluginServiceConfig;
@@ -88,6 +89,7 @@ pub struct PluginsConfigInput {
     pub config_layer_stack: ConfigLayerStack,
     pub plugins_enabled: bool,
     pub remote_plugin_enabled: bool,
+    pub plugin_sharing_enabled: bool,
     pub plugin_hooks_enabled: bool,
     pub chatgpt_base_url: String,
 }
@@ -97,6 +99,7 @@ impl PluginsConfigInput {
         config_layer_stack: ConfigLayerStack,
         plugins_enabled: bool,
         remote_plugin_enabled: bool,
+        plugin_sharing_enabled: bool,
         plugin_hooks_enabled: bool,
         chatgpt_base_url: String,
     ) -> Self {
@@ -104,9 +107,14 @@ impl PluginsConfigInput {
             config_layer_stack,
             plugins_enabled,
             remote_plugin_enabled,
+            plugin_sharing_enabled,
             plugin_hooks_enabled,
             chatgpt_base_url,
         }
+    }
+
+    fn remote_installed_plugin_sync_enabled(&self) -> bool {
+        self.remote_plugin_enabled || self.plugin_sharing_enabled
     }
 }
 
@@ -128,6 +136,8 @@ struct CachedFeaturedPluginIds {
 struct RemoteInstalledPluginsCacheRefreshRequest {
     service_config: RemotePluginServiceConfig,
     auth: Option<CodexAuth>,
+    include_global: bool,
+    include_workspace: bool,
     notify: RemoteInstalledPluginsCacheRefreshNotify,
     // App-server attaches side effects such as skills metadata invalidation and MCP refreshes when
     // remote installed state changes.
@@ -589,7 +599,9 @@ impl PluginsManager {
         &self,
         config: &PluginsConfigInput,
     ) -> HashMap<String, PluginConfig> {
-        if !config.remote_plugin_enabled {
+        let include_global = config.remote_plugin_enabled;
+        let include_workspace = config.remote_plugin_enabled || config.plugin_sharing_enabled;
+        if !include_global && !include_workspace {
             return HashMap::new();
         }
 
@@ -601,7 +613,18 @@ impl PluginsManager {
             return HashMap::new();
         };
 
-        remote_installed_plugins_to_config(plugins, &self.store)
+        let filtered_plugins = plugins
+            .iter()
+            .filter(|plugin| {
+                if plugin.marketplace_name == REMOTE_GLOBAL_MARKETPLACE_NAME {
+                    include_global
+                } else {
+                    include_workspace
+                }
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        remote_installed_plugins_to_config(&filtered_plugins, &self.store)
     }
 
     fn write_remote_installed_plugins_cache(&self, plugins: Vec<RemoteInstalledPlugin>) -> bool {
@@ -667,7 +690,9 @@ impl PluginsManager {
         notify: RemoteInstalledPluginsCacheRefreshNotify,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
-        if !config.plugins_enabled || !config.remote_plugin_enabled {
+        let include_global = config.remote_plugin_enabled;
+        let include_workspace = config.remote_plugin_enabled || config.plugin_sharing_enabled;
+        if !config.plugins_enabled || (!include_global && !include_workspace) {
             return;
         }
 
@@ -675,6 +700,8 @@ impl PluginsManager {
             RemoteInstalledPluginsCacheRefreshRequest {
                 service_config: remote_plugin_service_config(config),
                 auth,
+                include_global,
+                include_workspace,
                 notify,
                 on_effective_plugins_changed,
             },
@@ -687,7 +714,9 @@ impl PluginsManager {
         auth: Option<CodexAuth>,
         on_effective_plugins_changed: Option<Arc<dyn Fn() + Send + Sync + 'static>>,
     ) {
-        if !config.plugins_enabled || !config.remote_plugin_enabled {
+        let include_global = config.remote_plugin_enabled;
+        let include_workspace = config.remote_plugin_enabled || config.plugin_sharing_enabled;
+        if !config.plugins_enabled || (!include_global && !include_workspace) {
             return;
         }
 
@@ -706,6 +735,8 @@ impl PluginsManager {
             self.codex_home.clone(),
             remote_plugin_service_config(config),
             auth,
+            include_global,
+            include_workspace,
             Some(on_local_cache_changed),
         );
     }
@@ -1504,7 +1535,7 @@ impl PluginsManager {
                 auth_manager.clone(),
             );
 
-            if config.remote_plugin_enabled {
+            if config.remote_installed_plugin_sync_enabled() {
                 let config = config.clone();
                 let manager = Arc::clone(self);
                 let auth_manager = auth_manager.clone();
@@ -1764,6 +1795,8 @@ impl PluginsManager {
             let installed_plugins = crate::remote::fetch_remote_installed_plugins(
                 &request.service_config,
                 request.auth.as_ref(),
+                /*include_global*/ request.include_global,
+                /*include_workspace*/ request.include_workspace,
             )
             .await;
             match installed_plugins {

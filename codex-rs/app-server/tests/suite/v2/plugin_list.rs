@@ -1403,6 +1403,48 @@ async fn app_server_startup_sync_downloads_remote_installed_plugin_bundles() -> 
 }
 
 #[tokio::test]
+async fn app_server_startup_sync_uses_workspace_installed_api_with_plugin_sharing() -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let server = MockServer::start().await;
+    write_plugins_enabled_config_with_base_url(
+        codex_home.path(),
+        &format!("{}/backend-api/", server.uri()),
+    )?;
+    write_chatgpt_auth(
+        codex_home.path(),
+        ChatGptAuthFixture::new("chatgpt-token")
+            .account_id("account-123")
+            .chatgpt_user_id("user-123")
+            .chatgpt_account_id("account-123"),
+        AuthCredentialsStoreMode::File,
+    )?;
+    mount_remote_installed_plugins(&server, "WORKSPACE", empty_remote_installed_plugins_body())
+        .await;
+
+    let mut mcp = McpProcess::new_with_plugin_startup_tasks(codex_home.path()).await?;
+    timeout(DEFAULT_TIMEOUT, mcp.initialize()).await??;
+
+    wait_for_remote_plugin_request_count(
+        &server,
+        "/ps/plugins/installed",
+        /*expected_count*/ 2,
+    )
+    .await?;
+    assert!(
+        !server
+            .received_requests()
+            .await
+            .expect("wiremock should record requests")
+            .iter()
+            .any(|request| request
+                .url
+                .query()
+                .is_some_and(|query| query.contains("scope=GLOBAL")))
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn plugin_list_sync_upgrades_and_removes_remote_installed_plugin_bundles() -> Result<()> {
     let codex_home = TempDir::new()?;
     let server = MockServer::start().await;
