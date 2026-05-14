@@ -275,6 +275,19 @@ exit $cargo.ExitCode
     $probeDir | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 }
 
+function Initialize-ArchiveExtractDirectories {
+    $partitionCount = 4
+    if ($env:NEXTEST_PARTITION -match "^[^:]+:\d+/(\d+)$") {
+        $partitionCount = [int]$matches[1]
+    }
+
+    foreach ($part in 1..$partitionCount) {
+        $directoryName = "nextest-extract-part-{0}-of-{1}" -f $part, $partitionCount
+        $directoryPath = Join-Path $env:RUNNER_TEMP $directoryName
+        New-Item -Path $directoryPath -ItemType Directory -Force | Out-Null
+    }
+}
+
 if (Test-Path "D:\") {
     Write-Output "Using existing drive at D:"
     $Drive = "D:"
@@ -318,5 +331,6 @@ New-Item -Path $Tmp -ItemType Directory -Force | Out-Null
 if ($env:WINDOWS_ARM64_ARCHIVE_FILE) {
     Write-Output "Exporting ARM64 MSVC environment for nextest archive build"
     Export-MsvcEnvironment -TargetArch "arm64" -RequiredComponent "Microsoft.VisualStudio.Component.VC.Tools.ARM64"
+    Initialize-ArchiveExtractDirectories
     Install-ArchiveCargoProbe
 }
