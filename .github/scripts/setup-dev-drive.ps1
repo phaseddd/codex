@@ -128,7 +128,7 @@ internal static class Program
         {
             UseShellExecute = false,
         };
-        var filteredArgs = new List<string> { "-flavor", "link" };
+        var filteredArgs = new List<string> { "-flavor", "link", "/defaultlib:ucrt" };
         foreach (var arg in args)
         {
             if (!string.Equals(arg, "/arm64hazardfree", StringComparison.OrdinalIgnoreCase))
@@ -163,9 +163,7 @@ internal static class Program
         }
 
         var filteredResponsePath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName() + ".rsp");
-        var responseContents = File.ReadAllText(responsePath)
-            .Replace("/arm64hazardfree", string.Empty)
-            .Replace("/defaultlib:msvcrt", "/defaultlib:msvcrt /defaultlib:ucrt");
+        var responseContents = File.ReadAllText(responsePath).Replace("/arm64hazardfree", string.Empty);
         File.WriteAllText(filteredResponsePath, responseContents);
         return "@" + filteredResponsePath;
     }
