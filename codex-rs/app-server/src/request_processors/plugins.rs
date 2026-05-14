@@ -12,6 +12,7 @@ use codex_mcp::McpOAuthLoginSupport;
 use codex_mcp::oauth_login_support;
 use codex_mcp::should_retry_without_scopes;
 use codex_rmcp_client::perform_oauth_login_silent;
+use std::time::Instant;
 
 #[derive(Clone)]
 pub(crate) struct PluginRequestProcessor {
@@ -422,6 +423,7 @@ impl PluginRequestProcessor {
         &self,
         params: PluginListParams,
     ) -> Result<PluginListResponse, JSONRPCErrorError> {
+        let started_at = Instant::now();
         let plugins_manager = self.thread_manager.plugins_manager();
         let PluginListParams {
             cwds,
@@ -432,33 +434,78 @@ impl PluginRequestProcessor {
         let marketplace_kinds =
             marketplace_kinds.unwrap_or_else(|| vec![PluginListMarketplaceKind::Local]);
         let include_local = marketplace_kinds.contains(&PluginListMarketplaceKind::Local);
+        tracing::info!(
+            root_count = roots.len(),
+            explicit_marketplace_kinds,
+            marketplace_kinds = ?marketplace_kinds,
+            include_local,
+            "plugin/list request started"
+        );
 
+        let config_started_at = Instant::now();
         let config = self.load_latest_config(/*fallback_cwd*/ None).await?;
+        tracing::info!(
+            elapsed_ms = config_started_at.elapsed().as_millis(),
+            plugins_enabled = config.features.enabled(Feature::Plugins),
+            remote_plugins_enabled = config.features.enabled(Feature::RemotePlugin),
+            plugin_sharing_enabled = config.features.enabled(Feature::PluginSharing),
+            "plugin/list loaded config"
+        );
         let empty_response = || PluginListResponse {
             marketplaces: Vec::new(),
             marketplace_load_errors: Vec::new(),
             featured_plugin_ids: Vec::new(),
         };
         if !config.features.enabled(Feature::Plugins) {
+            tracing::info!(
+                elapsed_ms = started_at.elapsed().as_millis(),
+                "plugin/list completed with plugins feature disabled"
+            );
             return Ok(empty_response());
         }
+        let auth_started_at = Instant::now();
         let auth = self.auth_manager.auth().await;
+        tracing::info!(
+            elapsed_ms = auth_started_at.elapsed().as_millis(),
+            has_auth = auth.is_some(),
+            "plugin/list loaded auth state"
+        );
+        let workspace_setting_started_at = Instant::now();
         if !self
             .workspace_codex_plugins_enabled(&config, auth.as_ref())
             .await
         {
+            tracing::info!(
+                elapsed_ms = started_at.elapsed().as_millis(),
+                workspace_check_elapsed_ms = workspace_setting_started_at.elapsed().as_millis(),
+                "plugin/list completed with workspace Codex plugins disabled"
+            );
             return Ok(empty_response());
         }
+        tracing::info!(
+            elapsed_ms = workspace_setting_started_at.elapsed().as_millis(),
+            "plugin/list checked workspace Codex plugins setting"
+        );
         let plugins_input = config.plugins_config_input();
         if include_local || marketplace_kinds.contains(&PluginListMarketplaceKind::SharedWithMe) {
+            let background_tasks_started_at = Instant::now();
             plugins_manager.maybe_start_plugin_list_background_tasks_for_config(
                 &plugins_input,
                 auth.clone(),
                 &roots,
                 Some(self.effective_plugins_changed_callback()),
             );
+            tracing::info!(
+                elapsed_us = background_tasks_started_at.elapsed().as_micros(),
+                root_count = roots.len(),
+                include_local,
+                include_shared_with_me =
+                    marketplace_kinds.contains(&PluginListMarketplaceKind::SharedWithMe),
+                "plugin/list scheduled background refresh tasks"
+            );
         }
         let (mut data, marketplace_load_errors) = if include_local {
+            let local_started_at = Instant::now();
             let config_for_marketplace_listing = plugins_input.clone();
             let plugins_manager_for_marketplace_listing = plugins_manager.clone();
             let shared_plugin_ids_by_local_path = load_shared_plugin_ids_by_local_path(&config)?;
@@ -524,11 +571,33 @@ impl PluginRequestProcessor {
             })
             .await
             {
-                Ok(Ok(outcome)) => outcome,
+                Ok(Ok(outcome)) => {
+                    let plugin_count: usize = outcome
+                        .0
+                        .iter()
+                        .map(|marketplace| marketplace.plugins.len())
+                        .sum();
+                    tracing::info!(
+                        elapsed_ms = local_started_at.elapsed().as_millis(),
+                        marketplace_count = outcome.0.len(),
+                        plugin_count,
+                        marketplace_load_error_count = outcome.1.len(),
+                        "plugin/list local marketplace listing completed"
+                    );
+                    outcome
+                }
                 Ok(Err(err)) => {
+                    tracing::warn!(
+                        elapsed_ms = local_started_at.elapsed().as_millis(),
+                        "plugin/list local marketplace listing failed: {err}"
+                    );
                     return Err(Self::marketplace_error(err, "list marketplace plugins"));
                 }
                 Err(err) => {
+                    tracing::warn!(
+                        elapsed_ms = local_started_at.elapsed().as_millis(),
+                        "plugin/list local marketplace listing task failed: {err}"
+                    );
                     return Err(internal_error(format!(
                         "failed to list marketplace plugins: {err}"
                     )));
@@ -554,6 +623,11 @@ impl PluginRequestProcessor {
             let remote_plugin_service_config = RemotePluginServiceConfig {
                 chatgpt_base_url: config.chatgpt_base_url.clone(),
             };
+            let remote_started_at = Instant::now();
+            tracing::info!(
+                remote_sources = ?remote_sources,
+                "plugin/list remote marketplace fetch started"
+            );
             match codex_core_plugins::remote::fetch_remote_marketplaces(
                 &remote_plugin_service_config,
                 auth.as_ref(),
@@ -562,6 +636,16 @@ impl PluginRequestProcessor {
             .await
             {
                 Ok(remote_marketplaces) => {
+                    let remote_plugin_count: usize = remote_marketplaces
+                        .iter()
+                        .map(|marketplace| marketplace.plugins.len())
+                        .sum();
+                    tracing::info!(
+                        elapsed_ms = remote_started_at.elapsed().as_millis(),
+                        marketplace_count = remote_marketplaces.len(),
+                        plugin_count = remote_plugin_count,
+                        "plugin/list remote marketplace fetch completed"
+                    );
                     for remote_marketplace in remote_marketplaces
                         .into_iter()
                         .map(remote_marketplace_to_info)
@@ -598,6 +682,7 @@ impl PluginRequestProcessor {
                 Err(err) => {
                     warn!(
                         error = %err,
+                        elapsed_ms = remote_started_at.elapsed().as_millis(),
                         "plugin/list remote plugin catalog fetch failed; returning local marketplaces only"
                     );
                 }
@@ -608,14 +693,23 @@ impl PluginRequestProcessor {
             .iter()
             .any(|marketplace| marketplace.name == OPENAI_CURATED_MARKETPLACE_NAME)
         {
+            let featured_started_at = Instant::now();
             match plugins_manager
                 .featured_plugin_ids_for_config(&plugins_input, auth.as_ref())
                 .await
             {
-                Ok(featured_plugin_ids) => featured_plugin_ids,
+                Ok(featured_plugin_ids) => {
+                    tracing::info!(
+                        elapsed_ms = featured_started_at.elapsed().as_millis(),
+                        featured_plugin_id_count = featured_plugin_ids.len(),
+                        "plugin/list featured plugin ids fetched"
+                    );
+                    featured_plugin_ids
+                }
                 Err(err) => {
                     warn!(
                         error = %err,
+                        elapsed_ms = featured_started_at.elapsed().as_millis(),
                         "plugin/list featured plugin fetch failed; returning empty featured ids"
                     );
                     Vec::new()
@@ -625,6 +719,18 @@ impl PluginRequestProcessor {
             Vec::new()
         };
 
+        let plugin_count: usize = data
+            .iter()
+            .map(|marketplace| marketplace.plugins.len())
+            .sum();
+        tracing::info!(
+            elapsed_ms = started_at.elapsed().as_millis(),
+            marketplace_count = data.len(),
+            plugin_count,
+            marketplace_load_error_count = marketplace_load_errors.len(),
+            featured_plugin_id_count = featured_plugin_ids.len(),
+            "plugin/list request completed"
+        );
         Ok(PluginListResponse {
             marketplaces: data,
             marketplace_load_errors,
