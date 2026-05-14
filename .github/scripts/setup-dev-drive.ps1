@@ -163,7 +163,9 @@ internal static class Program
         }
 
         var filteredResponsePath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName() + ".rsp");
-        var responseContents = File.ReadAllText(responsePath).Replace("/arm64hazardfree", string.Empty);
+        var responseContents = File.ReadAllText(responsePath)
+            .Replace("/arm64hazardfree", string.Empty)
+            .Replace("/defaultlib:msvcrt", "/defaultlib:msvcrt /defaultlib:ucrt");
         File.WriteAllText(filteredResponsePath, responseContents);
         return "@" + filteredResponsePath;
     }
